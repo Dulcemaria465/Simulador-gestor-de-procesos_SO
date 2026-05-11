@@ -307,6 +307,17 @@
             TERMINAR PROCESO
         </button>
 
+        <hr style="border-color:#30363d; margin:12px 0">
+
+        <label>Suspender / Reanudar proceso por PID</label>
+        <input type="number" id="inp-pid-suspender" placeholder="PID">
+        <button class="btn btn-gris" onclick="suspenderProceso()">
+            ⏸ SUSPENDER PROCESO
+        </button>
+        <button class="btn btn-azul" onclick="reanudarProceso()" style="margin-top:4px">
+            ▶ REANUDAR PROCESO
+        </button>
+
         <button class="btn btn-azul" onclick="despacharSiguiente()"
                 style="margin-top:6px">
             ▶ DESPACHAR SIGUIENTE
@@ -480,6 +491,35 @@
 
         if (data.ok) {
             document.getElementById('inp-pid-terminar').value = '';
+            actualizar();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    }
+    // ── Suspender proceso ─────────────────────────────────────────────────────
+    async function suspenderProceso() {
+        const pid = document.getElementById('inp-pid-suspender').value;
+        if (!pid) { alert('Escribe un PID'); return; }
+        const res  = await fetch(`${API}/suspender`,
+            { method: 'POST', body: `pid=${pid}` });
+        const data = await res.json();
+        if (data.ok) {
+            document.getElementById('inp-pid-suspender').value = '';
+            actualizar();
+        } else {
+            alert('Error: ' + data.error);
+        }
+    }
+
+    // ── Reanudar proceso ──────────────────────────────────────────────────────
+    async function reanudarProceso() {
+        const pid = document.getElementById('inp-pid-suspender').value;
+        if (!pid) { alert('Escribe un PID'); return; }
+        const res  = await fetch(`${API}/reanudar`,
+            { method: 'POST', body: `pid=${pid}` });
+        const data = await res.json();
+        if (data.ok) {
+            document.getElementById('inp-pid-suspender').value = '';
             actualizar();
         } else {
             alert('Error: ' + data.error);

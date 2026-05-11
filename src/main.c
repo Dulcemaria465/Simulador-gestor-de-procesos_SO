@@ -24,6 +24,30 @@ void* hilo_servidor(void* arg) {
     return NULL;
 }
 
+// ─── Demo productor-consumidor ────────────────────────────────────────────────
+Buffer* buffer_global = NULL;
+
+void* hilo_productor(void* arg) {
+    int pid = 1;
+    for (int i = 1; i <= 5; i++) {
+        buffer_producir(buffer_global, i, pid);
+        // pequeña pausa simulada
+        struct timespec ts = {0, 500000000}; // 0.5 seg
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
+void* hilo_consumidor(void* arg) {
+    int pid = 2;
+    for (int i = 1; i <= 5; i++) {
+        buffer_consumir(buffer_global, pid);
+        struct timespec ts = {0, 800000000}; // 0.8 seg
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
 // ─── Punto de entrada ─────────────────────────────────────────────────────────
 int main() {
     Simulador* sim = (Simulador*)malloc(sizeof(Simulador));
@@ -34,6 +58,17 @@ int main() {
 
     logger_registrar(sim->logger, -1, "SISTEMA", EVT_SISTEMA,
                      "Simulador iniciado");
+
+    // Demo productor-consumidor — corre primero
+    buffer_global = buffer_crear();
+    pthread_t prod, cons;
+    pthread_create(&prod, NULL, hilo_productor, NULL);
+    pthread_create(&cons, NULL, hilo_consumidor, NULL);
+    
+    // Esperar 5 segundos para ver el demo antes de arrancar el servidor
+    pthread_join(prod, NULL);
+    pthread_join(cons, NULL);
+
 
     // Arrancar servidor en hilo separado
     pthread_t hilo;

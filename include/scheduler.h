@@ -31,5 +31,6 @@ void       scheduler_encolar(Scheduler* s, PCB* pcb);
 PCB*       scheduler_siguiente(Scheduler* s);
 void       scheduler_imprimir_cola(const Scheduler* s);
 const char* algoritmo_a_texto(Algoritmo algoritmo);
+void scheduler_eliminar(Scheduler* s, int pid);
 
 #endif // SCHEDULER_H

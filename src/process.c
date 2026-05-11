@@ -32,7 +32,8 @@ int proceso_transicion(PCB* pcb, EstadoProceso nuevo_estado) {
     int valida = 0;
     switch (pcb->estado) {
         case NUEVO:       valida = (nuevo_estado == LISTO);      break;
-        case LISTO:       valida = (nuevo_estado == EJECUTANDO); break;
+        case LISTO: valida = (nuevo_estado == EJECUTANDO ||
+                      nuevo_estado == TERMINADO); break;
         case EJECUTANDO:  valida = (nuevo_estado == LISTO     ||
                                    nuevo_estado == ESPERANDO  ||
                                    nuevo_estado == TERMINADO); break;

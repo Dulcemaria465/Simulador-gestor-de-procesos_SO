@@ -111,4 +111,30 @@ const char* algoritmo_a_texto(Algoritmo algoritmo) {
         case PRIORIDAD:   return "Prioridad";
         default:          return "Desconocido";
     }
-}
+}            
+
+// ─── Elimina un proceso de la cola por PID ───────────────────────────────────
+void scheduler_eliminar(Scheduler* s, int pid) {
+    if (!s || !s->frente) return;
+
+    NodoCola* actual   = s->frente;
+    NodoCola* anterior = NULL;
+
+    while (actual) {
+        if (actual->pcb->pid == pid) {
+            if (anterior)
+                anterior->siguiente = actual->siguiente;
+            else
+                s->frente = actual->siguiente;
+
+            if (actual == s->final)
+                s->final = anterior;
+
+            free(actual);
+            s->cantidad--;
+            return;
+        }
+        anterior = actual;
+        actual   = actual->siguiente;
+    }
+}                          

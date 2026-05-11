@@ -87,7 +87,7 @@ static void manejador(struct mg_connection* c, int ev, void* ev_data) {
             int rafaga    = atoi(rafaga_s);
             int memoria   = atoi(memoria_s);
 
-            if (recursos_solicitar(sim->recursos, 1, memoria) == 0) {
+             if (recursos_solicitar(sim->recursos, 0, memoria) == 0){
                 PCB* pcb = proceso_crear(nombre, prioridad, rafaga, memoria);
                 sim->procesos[sim->total_procesos++] = pcb;
                 scheduler_encolar(sim->scheduler, pcb);
@@ -109,6 +109,7 @@ static void manejador(struct mg_connection* c, int ev, void* ev_data) {
                     "Access-Control-Allow-Origin: *\r\n",
                     "{\"ok\":false,\"error\":\"Recursos insuficientes\"}");
             }
+            
 
         // ── POST /api/terminar ────────────────────────────────────────────────
         } else if (mg_match(hm->uri, mg_str("/api/terminar"), NULL)) {
@@ -119,7 +120,9 @@ static void manejador(struct mg_connection* c, int ev, void* ev_data) {
             for (int i = 0; i < sim->total_procesos; i++) {
                 PCB* p = sim->procesos[i];
                 if (p && p->pid == pid && p->estado != TERMINADO) {
-                    recursos_liberar(sim->recursos, 1, p->memoria_mb);
+                    int liberar_cpu = (p->estado == EJECUTANDO) ? 1 : 0;
+                    recursos_liberar(sim->recursos, liberar_cpu, p->memoria_mb);
+                    scheduler_eliminar(sim->scheduler, p->pid);
                     proceso_terminar(p, CAUSA_USUARIO);
                     char desc[128];
                     snprintf(desc, sizeof(desc),
@@ -139,26 +142,61 @@ static void manejador(struct mg_connection* c, int ev, void* ev_data) {
                 "Access-Control-Allow-Origin: *\r\n",
                 "{\"ok\":false,\"error\":\"Proceso no encontrado\"}");
 
+       
         // ── POST /api/despachar ───────────────────────────────────────────────
         } else if (mg_match(hm->uri, mg_str("/api/despachar"), NULL)) {
-            PCB* pcb = scheduler_siguiente(sim->scheduler);
-            if (pcb) {
-                proceso_transicion(pcb, EJECUTANDO);
-                char desc[128];
-                snprintf(desc, sizeof(desc), "Despachado -> EJECUTANDO (%s)",
-                         algoritmo_a_texto(sim->scheduler->algoritmo));
-                logger_registrar(sim->logger, pcb->pid, pcb->nombre,
-                                 EVT_TRANSICION, desc);
-                mg_http_reply(c, 200,
-                    "Content-Type: application/json\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "{\"ok\":true,\"pid\":%d}", pcb->pid);
-            } else {
-                mg_http_reply(c, 200,
-                    "Content-Type: application/json\r\n"
-                    "Access-Control-Allow-Origin: *\r\n",
-                    "{\"ok\":false,\"error\":\"Cola vacia\"}");
+
+            // Buscar proceso ejecutando actualmente
+            PCB* ejecutando = NULL;
+            for (int i = 0; i < sim->total_procesos; i++) {
+                if (sim->procesos[i] && sim->procesos[i]->estado == EJECUTANDO) {
+                    ejecutando = sim->procesos[i];
+                    break;
+                }
             }
+
+            // Si es Round Robin y hay uno ejecutando, rotarlo a la cola
+            if (ejecutando && sim->scheduler->algoritmo == ROUND_ROBIN) {
+                recursos_liberar(sim->recursos, 1, 0); // libera CPU
+                proceso_transicion(ejecutando, LISTO);
+                scheduler_encolar(sim->scheduler, ejecutando);
+                char desc[128];
+                snprintf(desc, sizeof(desc), "Quantum expirado -> vuelve a cola");
+                logger_registrar(sim->logger, ejecutando->pid, ejecutando->nombre,
+                                 EVT_TRANSICION, desc);
+                ejecutando = NULL; // ya no hay ejecutando
+            } else if (ejecutando) {
+                // Otro algoritmo con CPU ocupada — no rotar
+                mg_http_reply(c, 200,
+                    "Content-Type: application/json\r\n"
+                    "Access-Control-Allow-Origin: *\r\n",
+                    "{\"ok\":false,\"error\":\"CPU ocupada\"}");
+                goto fin_despachar;
+            }
+
+            // Despachar siguiente de la cola
+            {
+                PCB* pcb = scheduler_siguiente(sim->scheduler);
+                if (pcb) {
+                    recursos_solicitar(sim->recursos, 1, 0);
+                    proceso_transicion(pcb, EJECUTANDO);
+                    char desc[128];
+                    snprintf(desc, sizeof(desc), "Despachado -> EJECUTANDO (%s)",
+                             algoritmo_a_texto(sim->scheduler->algoritmo));
+                    logger_registrar(sim->logger, pcb->pid, pcb->nombre,
+                                     EVT_TRANSICION, desc);
+                    mg_http_reply(c, 200,
+                        "Content-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\n",
+                        "{\"ok\":true,\"pid\":%d}", pcb->pid);
+                } else {
+                    mg_http_reply(c, 200,
+                        "Content-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\n",
+                        "{\"ok\":false,\"error\":\"Cola vacia\"}");
+                }
+            }
+            fin_despachar:;
 
         // ── POST /api/algoritmo ───────────────────────────────────────────────
         } else if (mg_match(hm->uri, mg_str("/api/algoritmo"), NULL)) {
@@ -184,6 +222,65 @@ static void manejador(struct mg_connection* c, int ev, void* ev_data) {
                 "Content-Type: application/json\r\n"
                 "Access-Control-Allow-Origin: *\r\n",
                 "{\"ok\":true}");
+
+
+        
+        // ── POST /api/suspender ───────────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/api/suspender"), NULL)) {
+            char pid_s[8];
+            mg_http_get_var(&hm->body, "pid", pid_s, sizeof(pid_s));
+            int pid = atoi(pid_s);
+
+            for (int i = 0; i < sim->total_procesos; i++) {
+                PCB* p = sim->procesos[i];
+                if (p && p->pid == pid && 
+                   (p->estado == EJECUTANDO || p->estado == LISTO)) {
+                    if (p->estado == EJECUTANDO)
+                        recursos_liberar(sim->recursos, 1, 0);
+                    proceso_transicion(p, ESPERANDO);
+                    char desc[128];
+                    snprintf(desc, sizeof(desc), "Suspendido por usuario");
+                    logger_registrar(sim->logger, p->pid, p->nombre,
+                                     EVT_TRANSICION, desc);
+                    mg_http_reply(c, 200,
+                        "Content-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\n",
+                        "{\"ok\":true}");
+                    return;
+                }
+            }
+            mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{\"ok\":false,\"error\":\"Proceso no encontrado\"}");
+
+        // ── POST /api/reanudar ────────────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/api/reanudar"), NULL)) {
+            char pid_s[8];
+            mg_http_get_var(&hm->body, "pid", pid_s, sizeof(pid_s));
+            int pid = atoi(pid_s);
+
+            for (int i = 0; i < sim->total_procesos; i++) {
+                PCB* p = sim->procesos[i];
+                if (p && p->pid == pid && p->estado == ESPERANDO) {
+                    proceso_transicion(p, LISTO);
+                    scheduler_encolar(sim->scheduler, p);
+                    char desc[128];
+                    snprintf(desc, sizeof(desc), "Reanudado -> vuelve a cola");
+                    logger_registrar(sim->logger, p->pid, p->nombre,
+                                     EVT_TRANSICION, desc);
+                    mg_http_reply(c, 200,
+                        "Content-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\n",
+                        "{\"ok\":true}");
+                    return;
+                }
+            }
+            mg_http_reply(c, 200,
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n",
+                "{\"ok\":false,\"error\":\"Proceso no encontrado o no suspendido\"}");
+        
 
         // ── Archivos estáticos (interfaz web) ─────────────────────────────────
         } else {
